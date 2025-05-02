@@ -55,39 +55,42 @@ macro_rules! unpack_impl {
 
             assert!(input.len() >= NUM_BITS * $bytes);
 
-            let r = |output_idx: usize| {
-                <$t>::from_le_bytes(
-                    input[output_idx * $bytes..output_idx * $bytes + $bytes]
-                        .try_into()
-                        .unwrap(),
-                )
-            };
-
             // @NOTE
             // I was surprised too, but this macro vs. a for loop saves around 4.5 - 5x on
             // performance in a microbenchmark. Although the code it generates is completely
             // insane. There should be something we can do here to make this less code, sane code
             // and faster code.
+
+            let r = |start_byte: usize| {
+                <$t>::from_le_bytes(
+                    input[start_byte..start_byte + $bytes]
+                        .try_into()
+                        .unwrap(),
+                )
+            };
+
+            let mut val = r(0); // Read first val
+            let mut bits_left = $bits;
             seq_macro!(i in 0..$bits {
-                let start_bit = i * NUM_BITS;
-                let end_bit = start_bit + NUM_BITS;
-
-                let start_bit_offset = start_bit % $bits;
-                let end_bit_offset = end_bit % $bits;
-                let start_byte = start_bit / $bits;
-                let end_byte = end_bit / $bits;
-                if start_byte != end_byte && end_bit_offset != 0 {
-                    let val = r(start_byte);
-                    let a = val >> start_bit_offset;
-                    let val = r(end_byte);
-                    let b = val << (NUM_BITS - end_bit_offset);
-
-                    output[i] = a | (b & mask);
-                } else {
-                    let val = r(start_byte);
-                    output[i] = (val >> start_bit_offset) & mask;
+                // We have not enough valid bits left in val, so reset val & bits_left
+                if bits_left < NUM_BITS {
+                    let start_bit = i * NUM_BITS;
+                    let start_byte = std::cmp::min(start_bit / 8, input.len() - $bytes); // Avoid going out of bounds
+                    let start_bit_offset = start_bit - start_byte * 8;
+                    val = r(start_byte) >> start_bit_offset;
+                    bits_left = $bits - start_bit_offset;
                 }
+
+                output[i] = (val & mask);
+
+                // Prepare value for next iteration
+                val >>= NUM_BITS;
+                bits_left -= NUM_BITS;
             });
+
+            // This is to avoid unused error from sequential code
+            _ = val;
+            _ = bits_left;
         }
     };
 }
